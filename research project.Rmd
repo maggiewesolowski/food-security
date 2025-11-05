@@ -1,0 +1,265 @@
+---
+title: "research project"
+author: "Maggie Wesolowski"
+date: "2025-02-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ipumsr)
+library(stargazer)
+library(ggplot2)
+library(tidyr)
+library(broom)
+library(htmlTable)
+library(car)
+library(estimatr)
+library(skedastic)
+library(Hmisc)
+library(lmtest)
+```
+
+```{r}
+my_ddi = read_ipums_ddi("cps_00002.xml")
+my_data = read_ipums_micro(my_ddi, data_file = "cps_00002.dat.gz", verbose = FALSE)
+
+my_data
+```
+
+##Cleaning Data##
+```{r}
+my_data = my_data %>%  filter(FSSTATUS < 4) %>% filter(FSSTATUSC < 4) %>% filter(MARST < 8) %>% filter(LABFORCE > 0) %>% filter(FAMINC > 119)
+my_data
+
+#only used so when I made descriptive stats table these variables didn't appear 
+#my_data = my_data %>% select(-FSSTATUSA) %>% select(-FSSTATUSC)
+#my_data
+```
+
+
+###Recoding Data##
+
+Labor Force:
+```{r}
+#changes variable so that 0=not in labor force and 1=in labor force 
+my_data = my_data %>% 
+  mutate(LABFORCE = case_when(LABFORCE==2~1, TRUE~0))
+```
+
+```{r}
+my_data = my_data %>%
+  mutate(NCHILD = case_when(NCHILD==0~"0", NCHILD==1~"1", NCHILD==2~"2", NCHILD==3~"3", NCHILD>=4~"4+"))
+```
+
+
+```{r}
+my_data <- my_data %>%
+  mutate(
+    FAMINC = case_when(
+      FAMINC >= 210 & FAMINC <= 350 ~ "$5,000-$9,999",
+      FAMINC >= 400 & FAMINC <= 560 ~ "$10,000-$19,999",
+      FAMINC >= 600 & FAMINC <= 710 ~ "$20,000-$29,999",
+      FAMINC >= 720 & FAMINC <= 730 ~ "$30,000-$39,999",
+      FAMINC == 740 ~ "$40,000-$49,999",   # FIXED!
+      FAMINC == 820 ~ "$50,000-$59,999",
+      FAMINC == 830 ~ "$60,000-$74,999",
+      FAMINC == 841 ~ "$75,000-$99,999",
+      FAMINC == 842 ~ "$100,000-$149,999",
+      FAMINC == 843 ~ "$150,000+"
+    ),
+    FAMINC = factor(FAMINC, levels = c(
+      "$5,000-$9,999",
+      "$10,000-$19,999",
+      "$20,000-$29,999",
+      "$30,000-$39,999",
+      "$40,000-$49,999",
+      "$50,000-$59,999",
+      "$60,000-$74,999",
+      "$75,000-$99,999",
+      "$100,000-$149,999",
+      "$150,000+"
+    ))
+  )
+```
+
+
+```{r}
+my_data = my_data %>% 
+  mutate(MARST = case_when(MARST==1~1, TRUE~0))
+```
+
+```{r}
+my_data = my_data %>% mutate(FSSTATUS=case_when(FSSTATUS==1~1, TRUE~0))
+#1 = food secure
+#2 = low food secure
+#3 = very low food secure 
+# so 0 = 2 and 3 
+```
+
+
+###Regression Models and other tests##
+```{r}
+#full multiple regression
+reg = lm(FSSTATUS ~ FAMINC + AGE + MARST + NCHILD + LABFORCE, data = my_data)
+summary(reg)
+
+#testing for heteroskedasticity
+breusch_pagan(reg)
+bptest(reg)
+
+#robust model 
+reg2 = lm_robust(FSSTATUS ~ FAMINC + AGE + MARST + NCHILD + LABFORCE, data = my_data, se_type="stata")
+summary(reg2)
+
+#interaction model 
+#reg3 = lm(FSSTATUS ~ FAMINC + AGE  + MARST * NCHILD + LABFORCE, data = my_data)
+summary(reg3)
+```
+
+###Joint F-test##
+```{r}
+#test
+full_model <- lm(FSSTATUS ~ FAMINC + AGE + MARST + NCHILD + LABFORCE, data = my_data)
+reduced_model <- lm(FSSTATUS ~ FAMINC + AGE + MARST + LABFORCE, data = my_data)
+
+anova_result = anova(reduced_model, full_model)
+
+#table 
+f_table <- data.frame(
+  Model = c("Model 1", "Model 2"),
+  Residual_Df = anova_result$Res.Df,
+  RSS = round(anova_result$RSS, 3),
+  Df = c(NA, anova_result$Df[2]),
+  Sum_of_Squares = c(NA, round(anova_result$`Sum of Sq`[2], 3)),
+  F_value = c(NA, round(anova_result$F[2], 3)),
+  P_value = c(NA, format(anova_result$`Pr(>F)`[2], scientific = TRUE, digits = 4))  
+)
+
+html_table <- htmlTable(f_table, 
+                        header = c("Model", "Residual Df", "RSS", "Df", "Sum of Squares", "F Value", "P Value"),
+                        caption = " Table 4 Joint F-Test (NCHILD)", rnames = FALSE)
+
+# Print the HTML table
+html_table
+```
+
+
+
+
+```{r}
+#multiple regression
+#reg = lm(FSSTATUS ~ FAMINC + factor(FSSTATUSA) + factor(FSSTATUSC) + AGE + MARST + NCHILD + LABFORCE, data = my_data)
+#summary(reg)
+
+#reduced multiple regression for family income
+regs = lm(FSSTATUS ~ FAMINC, data = my_data)
+summary(regs)
+
+#regression w/o faminc
+regs1 = lm(FSSTATUS ~ AGE + MARST + NCHILD + LABFORCE, data = my_data)
+summary(regs1)
+
+```
+
+
+
+###All tables/figures##
+```{r}
+#stargazer(regs, type = "html", title = "Table 2 Simple Regression", align = TRUE, no.space = TRUE, digits = 3, out = "table2.html")
+#library(modelsummary)
+modelsummary(reg, output = "Table 3 Multiple Regression.html", statistic = c("std.error", "p.value", "conf.int"), stars = TRUE)
+
+#full regression table used reg before, this one is for robust regression (reg2)
+tidy_model <- tidy(reg2) %>%
+  select(term, estimate, std.error, p.value) %>%
+  rename(
+    Term = term,
+    Estimate = estimate,
+    `Std. Error` = std.error,
+    `p-value` = p.value
+  ) %>% mutate(across(where(is.numeric), ~ signif(., digits = 3))) %>% mutate(
+    `Significance` = case_when(
+      `p-value` < 0.001 ~ "***",
+      `p-value` < 0.01  ~ "**",
+      `p-value` < 0.05  ~ "*",
+      TRUE              ~ ""
+    )
+  )
+
+tidy_model <- tidy_model %>%
+  mutate(`p-value` = paste0(`p-value`, `Significance`)) %>%
+  select(-Significance)
+
+# Create and save HTML table
+html_table <- htmlTable(
+  tidy_model,
+  rnames = FALSE,
+  caption = "Table 6 Robust Multiple Regression<br><br><i>Note:</i> * p < 0.05, ** p < 0.01, *** p < 0.001"
+)
+
+# Save to HTML file
+writeLines(html_table, "regression_table2.html")
+
+
+#reduced regression table 
+tidy_model <- tidy(regs) %>%
+  select(term, estimate, std.error, p.value) %>%
+  rename(
+    Term = term,
+    Estimate = estimate,
+    `Std. Error` = std.error,
+    `p-value` = p.value
+  ) %>% mutate(across(where(is.numeric), ~ signif(., digits = 5))) %>% mutate(
+    `Significance` = case_when(
+      `p-value` < 0.001 ~ "***",
+      `p-value` < 0.01  ~ "**",
+      `p-value` < 0.05  ~ "*",
+      TRUE              ~ ""
+    )
+  )
+
+tidy_model <- tidy_model %>%
+  mutate(`p-value` = paste0(`p-value`, `Significance`)) %>%
+  select(-Significance)
+
+html_table <- htmlTable(
+  tidy_model,
+  rnames = FALSE,
+  caption = "Table 2 Reduced Multiple Regression<br><br><i>Note:</i> * p < 0.05, ** p < 0.01, *** p < 0.001"
+)
+
+writeLines(html_table, "regression_table1.html")
+
+```
+
+
+
+```{r}
+#descriptive stats table 
+my_data = my_data %>% select(-YEAR, -MONTH)
+# Create data frame for stargazer
+my_data1 <- as.data.frame(my_data)
+
+# Create descriptive statistics table
+stargazer(my_data1, type = "html", title = "Table 1 Descriptive Statistics", digits = 2, out = "table1.html")
+
+```
+
+```{r}
+
+faminc_tab <- as.data.frame(table(my_data$FAMINC))
+colnames(faminc_tab) <- c("Family Income", "Count")
+
+# Create HTML table
+htmlTable(faminc_tab, 
+          caption = "Frequency Table of Family Income")
+
+# Save to HTML file
+sink("faminc_table.html")
+print(htmlTable(faminc_tab, caption = "Frequency Table of Family Income"))
+sink()
+
+```
+
